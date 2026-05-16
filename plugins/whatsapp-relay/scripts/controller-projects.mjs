@@ -147,6 +147,7 @@ function normalizeProjectConfig(project = {}, { fallbackAlias = DEFAULT_PROJECT_
       project.alias ?? path.basename(workspace) ?? fallbackAlias,
       fallbackAlias
     ),
+    label: project.label ?? null,
     workspace,
     model: project.model ?? null,
     profile: project.profile ?? null,

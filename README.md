@@ -376,3 +376,7 @@ npm run whatsapp:auth
 npm run whatsapp:controller
 npm run whatsapp:status
 ```
+
+**feat: sync desktop projects and format relay messages**
+- Sync controller projects from Codex desktop project state.
+- Render relay-authored WhatsApp text in monospace for easier scanning.

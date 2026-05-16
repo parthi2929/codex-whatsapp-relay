@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import {
+  codexGlobalStateFile,
+  loadCodexDesktopProjectState,
+  syncProjectsFromCodexDesktop
+} from "./codex-desktop-projects.mjs";
 import { defaultProjectConfig, normalizeConfiguredProjects } from "./controller-projects.mjs";
 import { resolvePermissionLevel } from "./controller-permissions.mjs";
 import { authDir, controllerConfigFile, repoRoot } from "./paths.mjs";
@@ -146,21 +151,42 @@ function normalizeConfig(config = {}) {
 }
 
 export class ControllerConfigStore {
-  constructor(filePath = controllerConfigFile) {
+  constructor(
+    filePath = controllerConfigFile,
+    {
+      syncDesktopProjects = filePath === controllerConfigFile,
+      desktopStateFile = codexGlobalStateFile
+    } = {}
+  ) {
     this.filePath = filePath;
     this.data = defaultConfig();
     this.queue = Promise.resolve();
+    this.syncDesktopProjects = syncDesktopProjects;
+    this.desktopStateFile = desktopStateFile;
   }
 
   async load() {
+    let diskConfig = null;
     try {
       const raw = await fs.readFile(this.filePath, "utf8");
-      this.data = normalizeConfig(JSON.parse(raw));
+      diskConfig = normalizeConfig(JSON.parse(raw));
     } catch (error) {
       if (error?.code !== "ENOENT" && !(error instanceof SyntaxError)) {
         throw error;
       }
-      this.data = normalizeConfig(defaultConfig());
+      diskConfig = normalizeConfig(defaultConfig());
+    }
+
+    let nextConfig = diskConfig;
+    if (this.syncDesktopProjects) {
+      const desktopState = await loadCodexDesktopProjectState(this.desktopStateFile);
+      nextConfig = normalizeConfig(syncProjectsFromCodexDesktop(diskConfig, desktopState));
+    }
+
+    this.data = nextConfig;
+
+    if (JSON.stringify(this.data) !== JSON.stringify(diskConfig)) {
+      await this.save();
     }
 
     return this.data;

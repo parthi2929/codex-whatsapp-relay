@@ -275,7 +275,11 @@ function formatProjectStatus(project, projectSession, activeRun, permissionLevel
 
   const status = flags.length ? ` (${flags.join(", ")})` : "";
   const sessionId = shortThreadId(projectSession.threadId ?? null);
-  return `- ${project.alias}${status} session=${sessionId} perms=${permissionLevel}`;
+  const label =
+    project.label && normalizeProjectAlias(project.label, project.alias) !== project.alias
+      ? ` label="${project.label}"`
+      : "";
+  return `- ${project.alias}${label}${status} session=${sessionId} perms=${permissionLevel}`;
 }
 
 function formatProjectShortcut(index) {
@@ -577,6 +581,21 @@ export function sanitizeReplyTextForWhatsApp(text) {
     })
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+export function formatRelayMessageForWhatsApp(text) {
+  const sanitized = sanitizeReplyTextForWhatsApp(text);
+  return sanitized ? `\`\`\`\n${sanitized}\n\`\`\`` : "";
+}
+
+export function formatCodexReplyForWhatsApp({
+  relayPrefix = null,
+  replyText = null
+} = {}) {
+  return joinMessageSections(
+    relayPrefix ? formatRelayMessageForWhatsApp(relayPrefix) : null,
+    sanitizeReplyTextForWhatsApp(replyText)
+  );
 }
 
 export function buildVoiceReplyTextCompanion(text) {
@@ -3542,19 +3561,18 @@ export class WhatsAppControllerBridge {
             remoteJid,
             `Failed to generate the voice reply locally with ${DEFAULT_TTS_PROVIDER}: ${error.message}`
           );
-          await this.sendReply(
-            remoteJid,
-            scopeType === "btw"
-              ? replyText
-              : joinMessageSections(
-                  formatProjectRunReplyPrefix({
-                    projectAlias: project.alias,
-                    threadId: result.threadId,
-                    activeProjectAlias: this.getActiveProject(phoneKey).alias
-                  }),
-                  replyText
-                )
-          );
+          if (scopeType === "btw") {
+            await this.sendTextMessage(remoteJid, sanitizeReplyTextForWhatsApp(replyText));
+          } else {
+            await this.sendCodexReply(remoteJid, {
+              relayPrefix: formatProjectRunReplyPrefix({
+                projectAlias: project.alias,
+                threadId: result.threadId,
+                activeProjectAlias: this.getActiveProject(phoneKey).alias
+              }),
+              replyText
+            });
+          }
         }
         await this.runNextQueuedPrompt({
           phoneKey,
@@ -3566,19 +3584,18 @@ export class WhatsAppControllerBridge {
         return;
       }
 
-      await this.sendReply(
-        remoteJid,
-        scopeType === "btw"
-          ? replyText
-          : joinMessageSections(
-              formatProjectRunReplyPrefix({
-                projectAlias: project.alias,
-                threadId: result.threadId,
-                activeProjectAlias: this.getActiveProject(phoneKey).alias
-              }),
-              replyText
-            )
-      );
+      if (scopeType === "btw") {
+        await this.sendTextMessage(remoteJid, sanitizeReplyTextForWhatsApp(replyText));
+      } else {
+        await this.sendCodexReply(remoteJid, {
+          relayPrefix: formatProjectRunReplyPrefix({
+            projectAlias: project.alias,
+            threadId: result.threadId,
+            activeProjectAlias: this.getActiveProject(phoneKey).alias
+          }),
+          replyText
+        });
+      }
       await this.runNextQueuedPrompt({
         phoneKey,
         remoteJid,
@@ -3632,7 +3649,17 @@ export class WhatsAppControllerBridge {
   }
 
   async sendReply(remoteJid, text) {
-    await this.sendTextMessage(remoteJid, sanitizeReplyTextForWhatsApp(text));
+    await this.sendTextMessage(remoteJid, formatRelayMessageForWhatsApp(text));
+  }
+
+  async sendCodexReply(remoteJid, { relayPrefix = null, replyText = null } = {}) {
+    await this.sendTextMessage(
+      remoteJid,
+      formatCodexReplyForWhatsApp({
+        relayPrefix,
+        replyText
+      })
+    );
   }
 
   async sendVoiceReply(remoteJid, text, voiceReply, languageIdHint = null) {
