@@ -380,3 +380,7 @@ npm run whatsapp:status
 **feat: sync desktop projects and format relay messages**
 - Sync controller projects from Codex desktop project state.
 - Render relay-authored WhatsApp text in monospace for easier scanning.
+
+**feat: keep the Windows controller bridge alive**
+- Add a watchdog that restarts an enabled controller bridge when it stops.
+- Add a hidden Windows launcher script for logon startup tasks.
