@@ -4,6 +4,8 @@ Put Codex in your WhatsApp.
 
 WhatsApp Relay is a Codex plugin that links a local WhatsApp account to Codex, lets Codex read and send WhatsApp messages, and can optionally let you control Codex from an allowed direct chat.
 
+The relay can also keep multiple linked WhatsApp accounts open at the same time. Each account gets a short tag such as `@personal`, `@sales`, or `@support`, so Codex can read the right account's chats without guessing.
+
 The useful part is the mental model: scan a QR once, let the relay hold the WhatsApp session, and keep talking to Codex from your phone. Under the hood it uses `codex app-server`, so phone-controlled chats map to native Codex threads that can be resumed later in Codex and across WhatsApp messages.
 
 The controller bridge is now project-aware. One chat can keep `api` busy, switch to `web`, fire a one-shot prompt into another repo, and still ask a disposable `/btw` side question without losing the main thread.
@@ -11,6 +13,8 @@ The controller bridge is now project-aware. One chat can keep `api` busy, switch
 ## What You Can Do
 
 - link your local WhatsApp account to Codex with one QR scan
+- keep several WhatsApp accounts live under one local relay manager
+- refer to WhatsApp accounts by tags like `@personal`, `@sales`, and `@support`
 - read chats, inspect cached messages, sync history, and send WhatsApp replies from Codex
 - treat one allowed WhatsApp chat like a lightweight Codex client
 - keep multiple projects alive from one chat and switch between them without losing session state
@@ -38,18 +42,19 @@ Do all of the following:
 1. Clone the repo into ~/.codex/plugins/whatsapp-relay if it does not exist yet.
 2. If it already exists, fetch tags and check out v0.4.3 without deleting unrelated user files.
 3. Run npm install inside ~/.codex/plugins/whatsapp-relay.
-4. Create or update ~/.agents/plugins/marketplace.json so it contains a personal marketplace entry for this plugin.
-5. Keep any existing marketplace entries that are already there.
-6. Make sure the plugin entry uses:
+4. Preserve existing WhatsApp Relay runtime state. If legacy data exists at plugins/whatsapp-relay/data/auth and plugins/whatsapp-relay/data/store.json, keep it in place; the relay will migrate it into the default @personal account on first run.
+5. Create or update ~/.agents/plugins/marketplace.json so it contains a personal marketplace entry for this plugin.
+6. Keep any existing marketplace entries that are already there.
+7. Make sure the plugin entry uses:
    - name: whatsapp-relay
    - source.source: local
    - source.path: ./.codex/plugins/whatsapp-relay/plugins/whatsapp-relay
    - policy.installation: AVAILABLE
    - policy.authentication: ON_USE
    - category: Productivity
-7. Do not create a repo-local marketplace entry.
-8. After writing the marketplace file, tell me to restart Codex.
-9. After restart, tell me to open /plugins and install WhatsApp Relay.
+8. Do not create a repo-local marketplace entry.
+9. After writing the marketplace file, tell me to restart Codex.
+10. After restart, tell me to open /plugins and install WhatsApp Relay.
 
 Do not push or publish anything. Only set up the local personal marketplace install.
 ```
@@ -63,6 +68,24 @@ Do not push or publish anything. Only set up the local personal marketplace inst
 
 If WhatsApp is not linked yet, Codex should first run the auth flow, wait for you to scan the QR code, verify the session, and then send the ping. If you want phone control, ask Codex to enable it. If you use the same WhatsApp account on your phone, `Message yourself` can be used as the control surface.
 
+Existing installs keep their current connection. On first run, legacy single-account data is copied from:
+
+```text
+plugins/whatsapp-relay/data/auth/
+plugins/whatsapp-relay/data/store.json
+plugins/whatsapp-relay/data/runtime.json
+```
+
+into:
+
+```text
+plugins/whatsapp-relay/data/accounts/personal/auth/
+plugins/whatsapp-relay/data/accounts/personal/store.json
+plugins/whatsapp-relay/data/accounts/personal/runtime.json
+```
+
+The old files are left in place as a backup. You only need to scan again if WhatsApp has already logged out that linked device or the auth files were missing.
+
 ## How It Works
 
 ```text
@@ -72,12 +95,60 @@ If WhatsApp is not linked yet, Codex should first run the auth flow, wait for yo
                 +----------+-----------+
                            ^
                            |
-Your phone <-> WhatsApp Relay daemon <-> WhatsApp session
+Your phone <-> WhatsApp Relay manager <-> @personal WhatsApp session
+                                  |
+                                  +-> @sales WhatsApp session
+                                  |
+                                  +-> @support WhatsApp session
 ```
 
-1. Link a local WhatsApp session by scanning the QR shown in Codex output.
-2. Codex can inspect chats, read cached messages, sync history, and send replies through MCP tools.
-3. If you enable phone control, allowed direct chats continue a persistent `codex app-server` thread from WhatsApp.
+1. Link the first local WhatsApp session by scanning the QR shown in Codex output or the CLI.
+2. The existing single-account install becomes `@personal`.
+3. Add more accounts with tags such as `@sales` or `@support`.
+4. The single relay manager keeps enabled accounts open and writes each account's chats into its own cache.
+5. Codex can inspect chats, read cached messages, sync history, and send replies through MCP tools by account tag.
+6. If you enable phone control, only allowed direct chats on the controller account continue a persistent `codex app-server` thread from WhatsApp.
+
+## Multi-Account WhatsApp
+
+The first controller account is still CLI-first or Codex-tool-first because nothing is connected before the first QR scan.
+
+CLI bootstrap:
+
+```bash
+npm run whatsapp:auth -- --account personal
+npm run whatsapp:manager
+```
+
+Codex bootstrap:
+
+- "Add a WhatsApp account tagged personal and start auth."
+- "Allow my WhatsApp number to control Codex."
+- "Start the WhatsApp Relay manager."
+
+After the controller bridge is live, the allowed controller chat can add more accounts:
+
+```text
+/accounts
+/account add sales Sales WhatsApp
+/account add support Support WhatsApp
+```
+
+The relay replies with a QR code for that account. Scan it from the phone that owns that WhatsApp number. After it connects, use:
+
+```text
+/accounts
+```
+
+Codex tools can then target accounts explicitly:
+
+```text
+whatsapp_list_chats account=sales
+whatsapp_read_messages account=support chatName="Customer ABC"
+whatsapp_send_message account=sales chatName="Ravi" text="Please send the updated PO."
+```
+
+Tags are lowercase account names without the `@` when passed to tools. In prose, use `@sales` or `@support` so the target account is obvious.
 
 ## Multi-Project Mental Model
 
@@ -108,6 +179,9 @@ You are in project-a
 ## Try It
 
 - "Link my WhatsApp account and verify the auth status."
+- "Add WhatsApp account sales and show me the QR."
+- "List WhatsApp accounts."
+- "Show unread chats from @sales."
 - "Show my unread WhatsApp chats."
 - "Send a WhatsApp message to Alice saying I'll be there in 10 minutes."
 - "Allow my number and start WhatsApp Relay so I can control Codex from WhatsApp."
@@ -122,6 +196,12 @@ Once the controller bridge is running, allowed direct chats can send:
 
 - plain text to continue the active project's current Codex session
 - voice notes to continue the active project's current Codex session after local transcription
+
+WhatsApp account control:
+
+- `/accounts` to list linked account tags and live status
+- `/account add <tag> [label]` to register another WhatsApp account and return a QR code
+- `/account auth <tag>` to show a QR code for an existing unauthenticated account
 
 Project control:
 
@@ -300,7 +380,8 @@ voice note
 - `workspace-write` is the default bridge permission level. It keeps the chat inside the workspace and relays approval prompts back to WhatsApp before guarded actions run.
 - `danger-full-access` is per-chat and requires a short confirmation code reply such as `/dfa 123456`. Use `/new` or `/permissions workspace-write` to drop back down.
 - Only one controller bridge should own the live WhatsApp session at a time. Starting a second checkout now refuses instead of silently replacing the current bridge.
-- Auth material under `plugins/whatsapp-relay/data/auth*` is local runtime state and should never be committed.
+- The relay manager is the single long-lived owner for all enabled WhatsApp account sockets.
+- Auth material under `plugins/whatsapp-relay/data/auth*` and `plugins/whatsapp-relay/data/accounts/*/auth` is local runtime state and should never be committed.
 - Typed slash commands remain the most reliable way to change sessions or permissions. Voice notes work best for natural prompts and short spoken commands like `help`, `status`, `stop`, and `new session`.
 
 ## Voice Notes
@@ -372,9 +453,10 @@ The Chatterbox path is slower than `say` because the Python process and model ar
 If you need to test outside Codex:
 
 ```bash
-npm run whatsapp:auth
-npm run whatsapp:controller
-npm run whatsapp:status
+npm run whatsapp:auth -- --account personal
+npm run whatsapp:auth -- --account sales
+npm run whatsapp:manager
+npm run whatsapp:status -- --account sales
 ```
 
 **feat: sync desktop projects and format relay messages**

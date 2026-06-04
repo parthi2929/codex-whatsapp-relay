@@ -16,6 +16,7 @@ test("ControllerConfigStore defaults to multilingual Chatterbox for new configs"
 
     assert.equal(config.ttsProvider, "chatterbox-turbo");
     assert.equal(config.ttsChatterboxAllowNonEnglish, true);
+    assert.equal(config.controllerAccount, "personal");
     assert.equal(config.defaultProject, "main");
     assert.equal(config.projects.length, 1);
     assert.equal(config.projects[0].alias, "main");
