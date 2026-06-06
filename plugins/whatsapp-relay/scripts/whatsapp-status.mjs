@@ -1,5 +1,6 @@
 import { ControllerConfigStore } from "./controller-config.mjs";
 import { getControllerProcessStatus } from "./controller-process.mjs";
+import { WhatsAppAccountStore } from "./account-store.mjs";
 import { normalizeAccountId } from "./paths.mjs";
 import { WhatsAppRuntime } from "./runtime.mjs";
 
@@ -15,6 +16,8 @@ function parseAccountArg(argv = process.argv.slice(2)) {
 }
 
 const accountId = parseAccountArg();
+const accountStore = new WhatsAppAccountStore();
+await accountStore.load();
 const runtime = new WhatsAppRuntime({
   accountId,
   logLevel: process.env.WHATSAPP_LOG_LEVEL ?? "error"

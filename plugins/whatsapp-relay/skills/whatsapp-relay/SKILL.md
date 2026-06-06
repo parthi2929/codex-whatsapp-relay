@@ -31,7 +31,13 @@ Use this skill when the user wants to connect one or more WhatsApp accounts, ins
 
    Use `whatsapp_allow_controller`, then `whatsapp_start_controller_bridge`.
 
-8. Once the bridge is running, allowed direct chats can:
+8. In Codex chat, prefer natural language and plugin mentions. For example:
+
+   - `@WhatsApp Relay list accounts`
+   - `@WhatsApp Relay add account sales labeled "Sales WhatsApp" and show me the QR`
+   - `@WhatsApp Relay read unread chats from @sales`
+
+9. Slash commands are only for messages sent inside WhatsApp from the allowed controller number. Once the bridge is running, allowed direct WhatsApp chats can:
 
    - send `/accounts` to list linked WhatsApp account tags
    - send `/account add <tag> [label]` to add another WhatsApp number and receive a QR code

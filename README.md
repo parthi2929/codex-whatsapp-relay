@@ -126,7 +126,17 @@ Codex bootstrap:
 - "Allow my WhatsApp number to control Codex."
 - "Start the WhatsApp Relay manager."
 
-After the controller bridge is live, the allowed controller chat can add more accounts:
+After the controller bridge is live, you can keep using normal Codex chat. Mention the plugin and the tag in plain language:
+
+```text
+@WhatsApp Relay list accounts.
+@WhatsApp Relay add account sales labeled "Sales WhatsApp" and show me the QR.
+@WhatsApp Relay read unread chats from @sales.
+```
+
+The relay replies with a QR code for that account. Scan it from the phone that owns that WhatsApp number.
+
+There is also an optional phone-side control surface. If you message the relay from the allowed WhatsApp controller number, the same account actions are available as WhatsApp chat shortcuts:
 
 ```text
 /accounts
@@ -134,13 +144,13 @@ After the controller bridge is live, the allowed controller chat can add more ac
 /account add support Support WhatsApp
 ```
 
-The relay replies with a QR code for that account. Scan it from the phone that owns that WhatsApp number. After it connects, use:
+After it connects, either ask Codex to list accounts or send this from the allowed WhatsApp controller chat:
 
 ```text
 /accounts
 ```
 
-Codex tools can then target accounts explicitly:
+Codex tools target accounts explicitly under the hood:
 
 ```text
 whatsapp_list_chats account=sales
@@ -186,13 +196,15 @@ You are in project-a
 - "Send a WhatsApp message to Alice saying I'll be there in 10 minutes."
 - "Allow my number and start WhatsApp Relay so I can control Codex from WhatsApp."
 - "Start new session in alpha app inside code directory."
-- "/project alpha-app"
-- "/in alpha-app run the failing tests and explain the error"
-- "/btw what changed in GPT-5.4 reasoning modes?"
+- "Switch my WhatsApp Codex session to project alpha-app."
+- "Ask project alpha-app to run the failing tests and explain the error."
+- "Ask a disposable side question: what changed in GPT-5.4 reasoning modes?"
 
 ## Phone Commands
 
-Once the controller bridge is running, allowed direct chats can send:
+These commands are sent inside WhatsApp from the allowed controller number. They are not meant for the Codex chat box; in Codex, ask naturally or mention `@WhatsApp Relay`.
+
+Once the controller bridge is running, allowed direct WhatsApp chats can send:
 
 - plain text to continue the active project's current Codex session
 - voice notes to continue the active project's current Codex session after local transcription
