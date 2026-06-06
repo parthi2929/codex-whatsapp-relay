@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-06-06
+
 ### Added
 
 - Multi-account WhatsApp runtime support with tagged accounts such as `@personal`, `@sales`, and `@support`.

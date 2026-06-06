@@ -32,15 +32,15 @@ Paste this prompt into Codex:
 Install the WhatsApp Relay plugin globally for my user account.
 
 Use this repository as the source:
-https://github.com/abuiles/codex-whatsapp-relay
+https://github.com/parthi2929/codex-whatsapp-relay
 
 Install the current release tag:
-v0.4.3
+v0.4.4
 
 Do all of the following:
 
 1. Clone the repo into ~/.codex/plugins/whatsapp-relay if it does not exist yet.
-2. If it already exists, fetch tags and check out v0.4.3 without deleting unrelated user files.
+2. If it already exists, fetch tags and check out v0.4.4 without deleting unrelated user files.
 3. Run npm install inside ~/.codex/plugins/whatsapp-relay.
 4. Preserve existing WhatsApp Relay runtime state. If legacy data exists at plugins/whatsapp-relay/data/auth and plugins/whatsapp-relay/data/store.json, keep it in place; the relay will migrate it into the default @personal account on first run.
 5. Create or update ~/.agents/plugins/marketplace.json so it contains a personal marketplace entry for this plugin.
