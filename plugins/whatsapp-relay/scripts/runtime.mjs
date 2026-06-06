@@ -13,7 +13,12 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import pino from "pino";
 
-import { authDir, credsFile, ensureRuntimeDirs, runtimeFile, storeFile } from "./paths.mjs";
+import {
+  defaultAccountId,
+  ensureAccountRuntimeDirs,
+  getAccountPaths,
+  normalizeAccountId
+} from "./paths.mjs";
 import { WhatsAppStore } from "./store.mjs";
 
 const require = createRequire(import.meta.url);
@@ -141,9 +146,11 @@ function payloadHasChat(payload, chatId) {
 }
 
 export class WhatsAppRuntime {
-  constructor({ logLevel = "warn" } = {}) {
+  constructor({ accountId = defaultAccountId, logLevel = "warn", paths = null } = {}) {
+    this.accountId = normalizeAccountId(accountId);
+    this.paths = paths ?? getAccountPaths(this.accountId);
     this.logger = createLogger(logLevel);
-    this.store = new WhatsAppStore(storeFile);
+    this.store = new WhatsAppStore(this.paths.storeFile);
     this.events = new EventEmitter();
     this.socket = null;
     this.startPromise = null;
@@ -151,23 +158,25 @@ export class WhatsAppRuntime {
     this.closing = false;
     this.state = {
       status: "idle",
-      hasCreds: existsSync(credsFile),
+      hasCreds: existsSync(this.paths.credsFile),
       user: null,
       lastQrAt: null,
       currentQrText: null,
       lastDisconnect: null,
-      authDir,
-      runtimeFile
+      accountId: this.accountId,
+      authDir: this.paths.authDir,
+      runtimeFile: this.paths.runtimeFile,
+      storeFile: this.paths.storeFile
     };
   }
 
   async initialize() {
-    await ensureRuntimeDirs();
+    await ensureAccountRuntimeDirs(this.accountId);
     await this.store.load();
   }
 
   hasSavedCreds() {
-    return existsSync(credsFile);
+    return existsSync(this.paths.credsFile);
   }
 
   summary() {
@@ -194,7 +203,7 @@ export class WhatsAppRuntime {
 
   async #startInternal({ printQrToTerminal }) {
     await this.initialize();
-    const { state, saveCreds } = await useMultiFileAuthState(authDir);
+    const { state, saveCreds } = await useMultiFileAuthState(this.paths.authDir);
     const { version } = await fetchLatestWaWebVersion();
 
     this.state.status = "connecting";
@@ -366,6 +375,18 @@ export class WhatsAppRuntime {
 
     await this.start({ printQrToTerminal: false });
     return this.waitForConnection(timeoutMs);
+  }
+
+  async stop() {
+    this.closing = true;
+    const socket = this.socket;
+    this.socket = null;
+    this.state.status = "stopped";
+    if (socket && typeof socket.end === "function") {
+      socket.end(new Error("WhatsApp runtime stopped."));
+    } else if (socket?.ws && typeof socket.ws.close === "function") {
+      socket.ws.close();
+    }
   }
 
   async downloadMediaBuffer(message) {

@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Multi-account WhatsApp runtime support with tagged accounts such as `@personal`, `@sales`, and `@support`.
+- A local account registry that migrates existing single-account auth and cache data into the default `@personal` account without deleting the legacy files.
+- Account-aware MCP tools for listing accounts, adding account tags, authenticating a specific account, reading account-specific chat caches, and sending through a selected account.
+- The controller daemon now acts as a single relay manager, keeping enabled WhatsApp accounts open while still allowing only the configured controller number to control Codex.
+- WhatsApp-side account commands for the allowed controller chat: `/accounts`, `/account add <tag> [label]`, and `/account auth <tag>`.
+- CLI account selection with `npm run whatsapp:auth -- --account <tag>` and `npm run whatsapp:status -- --account <tag>`.
+
+### Changed
+
+- `npm run check` and `npm test` now use cross-platform file discovery so the release workflow works from Windows shells.
+- Runtime state ignores now cover the new account registry and per-account auth/cache directories.
+
 ## [0.4.3] - 2026-03-30
 
 ### Fixed

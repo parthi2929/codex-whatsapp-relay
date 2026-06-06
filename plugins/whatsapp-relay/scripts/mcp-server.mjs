@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
+import { formatAccountRef, WhatsAppAccountStore } from "./account-store.mjs";
 import { ControllerConfigStore } from "./controller-config.mjs";
 import {
   normalizePermissionLevel,
@@ -13,16 +14,40 @@ import {
   startControllerDaemon,
   stopControllerDaemon
 } from "./controller-process.mjs";
-import { credsFile, storeFile } from "./paths.mjs";
+import { defaultAccountId, getAccountPaths, normalizeAccountId } from "./paths.mjs";
 import { WhatsAppRuntime } from "./runtime.mjs";
 import { normalizeTtsProvider } from "./voice-replier.mjs";
 
-const runtime = new WhatsAppRuntime({
-  logLevel: process.env.WHATSAPP_LOG_LEVEL ?? "warn"
-});
+const runtimes = new Map();
+const accountStore = new WhatsAppAccountStore();
 const controllerConfigStore = new ControllerConfigStore();
 
-await runtime.initialize();
+await accountStore.load();
+
+function getRuntime(accountId = defaultAccountId) {
+  const id = normalizeAccountId(accountId);
+  let runtime = runtimes.get(id);
+  if (!runtime) {
+    runtime = new WhatsAppRuntime({
+      accountId: id,
+      logLevel: process.env.WHATSAPP_LOG_LEVEL ?? "warn"
+    });
+    runtimes.set(id, runtime);
+  }
+  return runtime;
+}
+
+async function resolveAccountId(account = null) {
+  await accountStore.load();
+  return accountStore.resolveAccountId(account);
+}
+
+async function getInitializedRuntime(account = null) {
+  const accountId = await resolveAccountId(account);
+  const runtime = getRuntime(accountId);
+  await runtime.initialize();
+  return runtime;
+}
 
 function chatSummary(chat) {
   const stamp = chat.lastMessageTimestamp ?? chat.timestamp;
@@ -77,11 +102,12 @@ async function getBridgeState() {
   };
 }
 
-async function ensureDirectRuntimeAvailable(action) {
+async function ensureDirectRuntimeAvailable(action, account = null) {
+  const runtime = await getInitializedRuntime(account);
   const bridgeState = await getBridgeState();
   if (bridgeState.ownsLiveSession) {
     throw new Error(
-      `${action} is unavailable while the WhatsApp controller bridge is running because the daemon owns the live WhatsApp session. Stop the bridge or use cached data.`
+      `${action} is unavailable while the WhatsApp relay manager is running because the daemon owns the live WhatsApp sessions. Stop the bridge or use cached data.`
     );
   }
 
@@ -93,6 +119,7 @@ function controllerSummaryLines(config, processStatus) {
     `enabled: ${config.enabled ? "yes" : "no"}`,
     `running: ${processStatus.running ? "yes" : "no"}`,
     "codex_transport: app-server",
+    `controller_account: @${config.controllerAccount}`,
     `default_project: ${config.defaultProject}`,
     `workspace: ${config.workspace}`,
     `codex_bin: ${config.codexBin}`,
@@ -122,6 +149,20 @@ function controllerSummaryLines(config, processStatus) {
 
   if (processStatus.process.heartbeatAt) {
     lines.push(`heartbeat_at: ${processStatus.process.heartbeatAt}`);
+  }
+
+  if (processStatus.process.whatsappAccounts?.length) {
+    lines.push("");
+    lines.push("whatsapp_accounts:");
+    for (const account of processStatus.process.whatsappAccounts) {
+      lines.push(
+        `- @${account.accountId} status=${account.status} credentials=${
+          account.hasCreds ? "present" : "missing"
+        } chats=${account.recentChatCount ?? 0}${
+          account.userId ? ` user=${account.userId}` : ""
+        }`
+      );
+    }
   }
 
   if (config.allowedControllers.length) {
@@ -161,7 +202,7 @@ function controllerSummaryLines(config, processStatus) {
   return lines;
 }
 
-function resolveChatOrError({ chatId, chatName }) {
+function resolveChatOrError(runtime, { chatId, chatName }) {
   const resolved = runtime.store.resolveChat({ chatId, chatName });
   if (resolved.match) {
     return resolved.match;
@@ -189,21 +230,102 @@ const server = new McpServer({
 });
 
 server.tool(
-  "whatsapp_start_auth",
-  "Start the local WhatsApp auth flow and return the current terminal-style QR code.",
+  "whatsapp_list_accounts",
+  "List configured WhatsApp account tags.",
   {},
   async () => {
     try {
+      const data = await accountStore.load();
+      return textResult(
+        [
+          `default_account: @${data.defaultAccount}`,
+          `controller_account: @${data.controllerAccount}`,
+          "",
+          ...data.accounts.map((account) => {
+            const flags = [];
+            if (account.id === data.defaultAccount) {
+              flags.push("default");
+            }
+            if (account.id === data.controllerAccount) {
+              flags.push("controller");
+            }
+            if (account.enabled === false) {
+              flags.push("disabled");
+            }
+            return [
+              `- ${formatAccountRef(account)}${flags.length ? ` (${flags.join(", ")})` : ""}`,
+              account.label ? `  label=${account.label}` : null,
+              account.number ? `  number=${account.number}` : null,
+              account.userId ? `  user=${account.userId}` : null,
+              account.lastStatus ? `  status=${account.lastStatus}` : null
+            ]
+              .filter(Boolean)
+              .join(" ");
+          })
+        ].join("\n")
+      );
+    } catch (error) {
+      return textResult(error.message, { isError: true });
+    }
+  }
+);
+
+server.tool(
+  "whatsapp_add_account",
+  "Add or update a tagged WhatsApp account before running its QR auth flow.",
+  {
+    tag: z.string().min(1),
+    label: z.string().min(1).optional(),
+    number: z.string().min(5).optional()
+  },
+  async ({ tag, label, number }) => {
+    try {
+      const account = await accountStore.addAccount({ tag, label, number });
+      return textResult(
+        [
+          `Added WhatsApp account ${formatAccountRef(account)}.`,
+          account.label ? `label: ${account.label}` : null,
+          "Next step: call `whatsapp_start_auth` with this account tag and scan the QR code."
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
+    } catch (error) {
+      return textResult(error.message, { isError: true });
+    }
+  }
+);
+
+server.tool(
+  "whatsapp_start_auth",
+  "Start the local WhatsApp auth flow and return the current terminal-style QR code.",
+  {
+    account: z.string().min(1).optional()
+  },
+  async ({ account }) => {
+    try {
+      if (account) {
+        await accountStore.addAccount({
+          tag: account,
+          label: normalizeAccountId(account)
+        });
+      }
+      const runtime = await getInitializedRuntime(account);
       const result = await runtime.startAuthFlow();
       if (result.status === "connected") {
+        await accountStore.updateAccountStatus(runtime.accountId, {
+          userId: result.user?.id ?? null,
+          lastStatus: "connected",
+          connectedAt: new Date().toISOString()
+        });
         return textResult(
-          `WhatsApp is already connected as ${result.user?.id ?? "unknown"}.`
+          `WhatsApp account @${runtime.accountId} is already connected as ${result.user?.id ?? "unknown"}.`
         );
       }
 
       return textResult(
         [
-          "Scan this QR code directly from the terminal or Codex output.",
+          `Scan this QR code for WhatsApp account @${runtime.accountId} directly from the terminal or Codex output.`,
           "",
           formatQrBlock(result.qrText),
           "",
@@ -221,19 +343,24 @@ server.tool(
 server.tool(
   "whatsapp_auth_status",
   "Show whether the local WhatsApp account is authenticated and connected.",
-  {},
-  async () => {
+  {
+    account: z.string().min(1).optional()
+  },
+  async ({ account }) => {
+    const runtime = await getInitializedRuntime(account);
     const summary = runtime.summary();
     const bridgeState = await getBridgeState();
+    const paths = getAccountPaths(runtime.accountId);
     const status =
       bridgeState.ownsLiveSession && summary.status === "idle"
         ? bridgeState.processStatus.process.whatsappStatus ?? "connected_via_bridge"
         : summary.status;
     const lines = [
+      `account: @${runtime.accountId}`,
       `status: ${status}`,
       `credentials: ${summary.hasCreds ? "present" : "missing"}`,
-      `auth_file: ${credsFile}`,
-      `cache_file: ${storeFile}`,
+      `auth_file: ${paths.credsFile}`,
+      `cache_file: ${paths.storeFile}`,
       `recent_chat_count: ${summary.recentChatCount}`
     ];
 
@@ -374,7 +501,11 @@ server.tool(
     ttsChatterboxAllowNonEnglish
   }) => {
     try {
-      if (!runtime.hasSavedCreds()) {
+      const existingConfig = await controllerConfigStore.load();
+      const controllerRuntime = await getInitializedRuntime(
+        existingConfig.controllerAccount
+      );
+      if (!controllerRuntime.hasSavedCreds()) {
         throw new Error(
           "WhatsApp is not authenticated yet. Run `whatsapp_start_auth` before starting the controller bridge."
         );
@@ -458,18 +589,20 @@ server.tool(
   "whatsapp_list_chats",
   "List recent WhatsApp chats from the local cache.",
   {
+    account: z.string().min(1).optional(),
     limit: z.number().int().min(1).max(100).optional(),
     query: z.string().min(1).optional(),
     unreadOnly: z.boolean().optional()
   },
-  async ({ limit = 20, query, unreadOnly = false }) => {
+  async ({ account, limit = 20, query, unreadOnly = false }) => {
     try {
+      const runtime = await getInitializedRuntime(account);
       const chats = runtime.store.listChats({ limit, query, unreadOnly });
       if (!chats.length) {
         return textResult("No chats matched the requested filter.");
       }
 
-      return textResult(chats.map(chatSummary).join("\n"));
+      return textResult([`account: @${runtime.accountId}`, ...chats.map(chatSummary)].join("\n"));
     } catch (error) {
       return textResult(error.message, { isError: true });
     }
@@ -480,13 +613,15 @@ server.tool(
   "whatsapp_read_messages",
   "Read recent messages from one WhatsApp chat, identified by chat id or name.",
   {
+    account: z.string().min(1).optional(),
     chatId: z.string().min(1).optional(),
     chatName: z.string().min(1).optional(),
     limit: z.number().int().min(1).max(100).optional()
   },
-  async ({ chatId, chatName, limit = 20 }) => {
+  async ({ account, chatId, chatName, limit = 20 }) => {
     try {
-      const chat = resolveChatOrError({ chatId, chatName });
+      const runtime = await getInitializedRuntime(account);
+      const chat = resolveChatOrError(runtime, { chatId, chatName });
       const messages = runtime.store.getMessages(chat.id, limit);
 
       if (!messages.length) {
@@ -494,7 +629,11 @@ server.tool(
       }
 
       return textResult(
-        [`chat: ${chat.displayName} (${chat.id})`, ...messages.map(messageSummary)].join("\n")
+        [
+          `account: @${runtime.accountId}`,
+          `chat: ${chat.displayName} (${chat.id})`,
+          ...messages.map(messageSummary)
+        ].join("\n")
       );
     } catch (error) {
       return textResult(error.message, { isError: true });
@@ -506,14 +645,16 @@ server.tool(
   "whatsapp_sync_history",
   "Request older messages for a WhatsApp chat and store them in the local cache.",
   {
+    account: z.string().min(1).optional(),
     chatId: z.string().min(1).optional(),
     chatName: z.string().min(1).optional(),
     count: z.number().int().min(1).max(50).optional()
   },
-  async ({ chatId, chatName, count = 50 }) => {
+  async ({ account, chatId, chatName, count = 50 }) => {
     try {
-      await ensureDirectRuntimeAvailable("History sync");
-      const chat = resolveChatOrError({ chatId, chatName });
+      await ensureDirectRuntimeAvailable("History sync", account);
+      const runtime = await getInitializedRuntime(account);
+      const chat = resolveChatOrError(runtime, { chatId, chatName });
       const result = await runtime.syncChatHistory({
         chatId: chat.id,
         count
@@ -521,6 +662,7 @@ server.tool(
 
       return textResult(
         [
+          `account: @${runtime.accountId}`,
           `chat: ${chat.displayName} (${chat.id})`,
           `requested: ${count}`,
           `history_events: ${result.events}`,
@@ -544,25 +686,28 @@ server.tool(
   "whatsapp_send_message",
   "Send a text message to a WhatsApp chat identified by id or name.",
   {
+    account: z.string().min(1).optional(),
     chatId: z.string().min(1).optional(),
     chatName: z.string().min(1).optional(),
     text: z.string().min(1).max(4000)
   },
-  async ({ chatId, chatName, text }) => {
+  async ({ account, chatId, chatName, text }) => {
     try {
-      const chat = resolveChatOrError({ chatId, chatName });
+      const runtime = await getInitializedRuntime(account);
+      const chat = resolveChatOrError(runtime, { chatId, chatName });
       const bridgeState = await getBridgeState();
 
       if (bridgeState.ownsLiveSession) {
         await enqueueControllerCommand({
           type: "send_message",
           payload: {
+            accountId: runtime.accountId,
             chatId: chat.id,
             text
           }
         });
         return textResult(
-          `Queued message to ${chat.displayName} (${chat.id}) through the controller bridge.`
+          `Queued message to ${chat.displayName} (${chat.id}) through WhatsApp account @${runtime.accountId}.`
         );
       }
 

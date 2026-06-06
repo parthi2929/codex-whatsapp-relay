@@ -1,9 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import {
+  codexGlobalStateFile,
+  loadCodexDesktopProjectState,
+  syncProjectsFromCodexDesktop
+} from "./codex-desktop-projects.mjs";
 import { defaultProjectConfig, normalizeConfiguredProjects } from "./controller-projects.mjs";
 import { resolvePermissionLevel } from "./controller-permissions.mjs";
-import { authDir, controllerConfigFile, repoRoot } from "./paths.mjs";
+import {
+  controllerConfigFile,
+  defaultAccountId,
+  getAccountPaths,
+  normalizeAccountId,
+  repoRoot
+} from "./paths.mjs";
 import { normalizeTtsProvider } from "./voice-replier.mjs";
 
 function digitsOnly(value) {
@@ -54,7 +65,7 @@ export function phoneKeyFromJid(remoteJid) {
   return match?.[1] ?? null;
 }
 
-async function readLidReverseMapping(lid) {
+async function readLidReverseMapping(lid, authDir) {
   const mappingPath = path.join(authDir, `lid-mapping-${lid}_reverse.json`);
   try {
     const raw = await fs.readFile(mappingPath, "utf8");
@@ -65,7 +76,7 @@ async function readLidReverseMapping(lid) {
   }
 }
 
-export async function resolvePhoneKeyFromJid(remoteJid) {
+export async function resolvePhoneKeyFromJid(remoteJid, { accountId = defaultAccountId } = {}) {
   const jid = String(remoteJid ?? "").trim();
   if (!jid) {
     return null;
@@ -78,7 +89,7 @@ export async function resolvePhoneKeyFromJid(remoteJid) {
 
   const lidMatch = jid.match(/^(\d+)(?::\d+)?@(lid|hosted\.lid)$/i);
   if (lidMatch) {
-    return readLidReverseMapping(lidMatch[1]);
+    return readLidReverseMapping(lidMatch[1], getAccountPaths(accountId).authDir);
   }
 
   return phoneKeyFromJid(jid);
@@ -87,6 +98,7 @@ export async function resolvePhoneKeyFromJid(remoteJid) {
 function defaultConfig() {
   return {
     enabled: false,
+    controllerAccount: defaultAccountId,
     workspace: repoRoot,
     defaultProject: defaultProjectConfig().alias,
     projects: [],
@@ -109,6 +121,7 @@ function normalizeConfig(config = {}) {
   };
 
   delete merged.fullAuto;
+  merged.controllerAccount = normalizeAccountId(merged.controllerAccount);
   merged.permissionLevel = resolvePermissionLevel(merged.permissionLevel);
   merged.ttsProvider = normalizeTtsProvider(merged.ttsProvider, "chatterbox-turbo");
   merged.ttsChatterboxAllowNonEnglish = normalizeBooleanish(
@@ -146,21 +159,42 @@ function normalizeConfig(config = {}) {
 }
 
 export class ControllerConfigStore {
-  constructor(filePath = controllerConfigFile) {
+  constructor(
+    filePath = controllerConfigFile,
+    {
+      syncDesktopProjects = filePath === controllerConfigFile,
+      desktopStateFile = codexGlobalStateFile
+    } = {}
+  ) {
     this.filePath = filePath;
     this.data = defaultConfig();
     this.queue = Promise.resolve();
+    this.syncDesktopProjects = syncDesktopProjects;
+    this.desktopStateFile = desktopStateFile;
   }
 
   async load() {
+    let diskConfig = null;
     try {
       const raw = await fs.readFile(this.filePath, "utf8");
-      this.data = normalizeConfig(JSON.parse(raw));
+      diskConfig = normalizeConfig(JSON.parse(raw));
     } catch (error) {
       if (error?.code !== "ENOENT" && !(error instanceof SyntaxError)) {
         throw error;
       }
-      this.data = normalizeConfig(defaultConfig());
+      diskConfig = normalizeConfig(defaultConfig());
+    }
+
+    let nextConfig = diskConfig;
+    if (this.syncDesktopProjects) {
+      const desktopState = await loadCodexDesktopProjectState(this.desktopStateFile);
+      nextConfig = normalizeConfig(syncProjectsFromCodexDesktop(diskConfig, desktopState));
+    }
+
+    this.data = nextConfig;
+
+    if (JSON.stringify(this.data) !== JSON.stringify(diskConfig)) {
+      await this.save();
     }
 
     return this.data;
@@ -239,13 +273,15 @@ export class ControllerConfigStore {
     return removed;
   }
 
-  async findControllerByJid(remoteJid) {
-    const phoneKey = await resolvePhoneKeyFromJid(remoteJid);
+  async findControllerByJid(remoteJid, { accountId = null } = {}) {
+    await this.load();
+    const phoneKey = await resolvePhoneKeyFromJid(remoteJid, {
+      accountId: accountId ?? this.data.controllerAccount
+    });
     if (!phoneKey) {
       return null;
     }
 
-    await this.load();
     return (
       this.data.allowedControllers.find((controller) => controller.phoneKey === phoneKey) ??
       null

@@ -8,7 +8,9 @@ import {
   applyRunLifecycleEvent,
   buildVoiceReplyTextCompanion,
   buildDangerFullAccessConfirmationMessage,
+  formatCodexReplyForWhatsApp,
   formatProjectRunReplyPrefix,
+  formatRelayMessageForWhatsApp,
   buildVoiceReplyPrompt,
   extractVoiceReplyEnvelope,
   extractOneShotVoiceReplyRequest,
@@ -234,6 +236,34 @@ test("formatProjectRunReplyPrefix marks background completions clearly", () => {
     [
       "Background result from alpha-checkin session 019d39a1 completed.",
       "You are currently in beta-checkin."
+    ].join("\n")
+  );
+});
+
+test("formatRelayMessageForWhatsApp renders relay-authored text as monospace", () => {
+  assert.equal(
+    formatRelayMessageForWhatsApp("Switched this chat to project axon.\nsession: none"),
+    [
+      "```",
+      "Switched this chat to project axon.",
+      "session: none",
+      "```"
+    ].join("\n")
+  );
+});
+
+test("formatCodexReplyForWhatsApp keeps relay prefixes monospace while leaving Codex text normal", () => {
+  assert.equal(
+    formatCodexReplyForWhatsApp({
+      relayPrefix: "Completed project axon session 019e3076.",
+      replyText: "Here is the actual answer."
+    }),
+    [
+      "```",
+      "Completed project axon session 019e3076.",
+      "```",
+      "",
+      "Here is the actual answer."
     ].join("\n")
   );
 });

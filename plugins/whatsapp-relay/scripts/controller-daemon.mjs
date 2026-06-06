@@ -7,26 +7,34 @@ import {
   releaseGlobalControllerOwner
 } from "./controller-owner.mjs";
 import { ControllerStateStore } from "./controller-state.mjs";
-import { WhatsAppRuntime } from "./runtime.mjs";
+import { WhatsAppRelayManager } from "./whatsapp-manager.mjs";
 
 let activeBridge = null;
+let activeManager = null;
 let shuttingDown = false;
 let ownsGlobalController = false;
 
-function buildBridge() {
-  const runtime = new WhatsAppRuntime({
+async function buildBridge() {
+  const configStore = new ControllerConfigStore();
+  const config = await configStore.load();
+  const manager = new WhatsAppRelayManager({
     logLevel: process.env.WHATSAPP_LOG_LEVEL ?? "warn"
   });
-  const configStore = new ControllerConfigStore();
+  await manager.startAll();
+  const runtime = manager.getOrCreateRuntime(config.controllerAccount);
   const stateStore = new ControllerStateStore();
   const bridge = new WhatsAppControllerBridge({
     runtime,
     configStore,
-    stateStore
+    stateStore,
+    accountStore: manager.accountStore,
+    getRuntimeForAccount: (accountId) => manager.getOrCreateRuntime(accountId),
+    getManagedAccountSummaries: () => manager.accountSummaries()
   });
 
   return {
     bridge,
+    manager,
     stateStore
   };
 }
@@ -39,6 +47,14 @@ async function shutdown(code = 0) {
       await activeBridge.stop();
     } catch (error) {
       console.error("failed to stop WhatsApp controller bridge cleanly", error);
+    }
+  }
+
+  if (activeManager) {
+    try {
+      await activeManager.stopAll();
+    } catch (error) {
+      console.error("failed to stop WhatsApp relay manager cleanly", error);
     }
   }
 
@@ -66,8 +82,9 @@ process.on("SIGINT", () => {
   });
 });
 
-const { bridge, stateStore } = buildBridge();
+const { bridge, manager, stateStore } = await buildBridge();
 activeBridge = bridge;
+activeManager = manager;
 
 try {
   const ownership = await claimGlobalControllerOwner();
@@ -80,7 +97,7 @@ try {
 
   ownsGlobalController = true;
   await bridge.start();
-  process.stdout.write("WhatsApp controller bridge started.\n");
+  process.stdout.write("WhatsApp relay manager started.\n");
 } catch (error) {
   await bridge.stop().catch(() => {});
   if (ownsGlobalController) {

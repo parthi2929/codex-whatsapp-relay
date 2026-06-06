@@ -8,6 +8,7 @@ import {
   normalizeVoiceCommandIntent,
   startCodexTurn
 } from "./codex-runner.mjs";
+import { formatAccountRef, WhatsAppAccountStore } from "./account-store.mjs";
 import {
   ControllerConfigStore,
   resolvePhoneKeyFromJid
@@ -67,6 +68,8 @@ function invalidControllerCommandError(message) {
 const COMMAND_ALIASES = new Map([
   ["help", "help"],
   ["h", "help"],
+  ["accounts", "accounts"],
+  ["account", "account"],
   ["projects", "projects"],
   ["project", "project"],
   ["status", "status"],
@@ -275,7 +278,11 @@ function formatProjectStatus(project, projectSession, activeRun, permissionLevel
 
   const status = flags.length ? ` (${flags.join(", ")})` : "";
   const sessionId = shortThreadId(projectSession.threadId ?? null);
-  return `- ${project.alias}${status} session=${sessionId} perms=${permissionLevel}`;
+  const label =
+    project.label && normalizeProjectAlias(project.label, project.alias) !== project.alias
+      ? ` label="${project.label}"`
+      : "";
+  return `- ${project.alias}${label}${status} session=${sessionId} perms=${permissionLevel}`;
 }
 
 function formatProjectShortcut(index) {
@@ -324,6 +331,9 @@ function projectHelpFooter() {
 function helpText() {
   return [
     "WhatsApp Codex bridge commands:",
+    "/accounts -> list linked WhatsApp account tags",
+    "/account add <tag> [label] -> add another WhatsApp account and return a QR code",
+    "/account auth <tag> -> show a QR code for an existing unauthenticated account",
     "/projects -> list configured projects",
     "/project -> show the active project for this chat",
     "/project <number|alias|project hint|path hint> -> switch this chat to another project, letting Codex resolve natural project hints against existing projects before auto-adding a repo from a path",
@@ -579,6 +589,21 @@ export function sanitizeReplyTextForWhatsApp(text) {
     .trim();
 }
 
+export function formatRelayMessageForWhatsApp(text) {
+  const sanitized = sanitizeReplyTextForWhatsApp(text);
+  return sanitized ? `\`\`\`\n${sanitized}\n\`\`\`` : "";
+}
+
+export function formatCodexReplyForWhatsApp({
+  relayPrefix = null,
+  replyText = null
+} = {}) {
+  return joinMessageSections(
+    relayPrefix ? formatRelayMessageForWhatsApp(relayPrefix) : null,
+    sanitizeReplyTextForWhatsApp(replyText)
+  );
+}
+
 export function buildVoiceReplyTextCompanion(text) {
   const sanitized = sanitizeReplyTextForWhatsApp(text);
   if (!sanitized) {
@@ -626,6 +651,10 @@ export function parseIncomingCommand(text, captureAllDirectMessages) {
         return { type: "help" };
       case "projects":
         return { type: "projects" };
+      case "accounts":
+        return { type: "accounts" };
+      case "account":
+        return { type: "account", payload };
       case "project":
         return { type: "project", payload };
       case "status":
@@ -1360,11 +1389,25 @@ export class WhatsAppControllerBridge {
   constructor({
     runtime,
     configStore = new ControllerConfigStore(),
-    stateStore = new ControllerStateStore()
+    stateStore = new ControllerStateStore(),
+    accountStore = new WhatsAppAccountStore(),
+    getRuntimeForAccount = null,
+    getManagedAccountSummaries = () => []
   }) {
     this.runtime = runtime;
+    this.accountId = runtime?.accountId ?? null;
+    this.getRuntimeForAccount =
+      getRuntimeForAccount ??
+      ((accountId = null) => {
+        if (!accountId || accountId === this.accountId) {
+          return this.runtime;
+        }
+        return null;
+      });
+    this.getManagedAccountSummaries = getManagedAccountSummaries;
     this.configStore = configStore;
     this.stateStore = stateStore;
+    this.accountStore = accountStore;
     this.started = false;
     this.startedAtMs = null;
     this.heartbeat = null;
@@ -1913,6 +1956,7 @@ export class WhatsAppControllerBridge {
       heartbeatAt: new Date().toISOString(),
       whatsappStatus: summary.status,
       whatsappUserId: summary.user?.id ?? null,
+      whatsappAccounts: this.getManagedAccountSummaries(),
       whatsappLastDisconnect: summary.lastDisconnect ?? null
     });
   }
@@ -2015,7 +2059,9 @@ export class WhatsAppControllerBridge {
             "Controller send_message command is missing payload.text."
           );
         }
-        await this.sendTextMessage(command.payload.chatId, command.payload.text);
+        await this.sendTextMessage(command.payload.chatId, command.payload.text, {
+          accountId: command.payload.accountId ?? this.accountId
+        });
         return;
       default:
         throw invalidControllerCommandError(
@@ -2092,8 +2138,8 @@ export class WhatsAppControllerBridge {
 
     const config = await this.configStore.load();
     const [controller, phoneKey] = await Promise.all([
-      this.configStore.findControllerByJid(remoteJid),
-      resolvePhoneKeyFromJid(remoteJid)
+      this.configStore.findControllerByJid(remoteJid, { accountId: this.accountId }),
+      resolvePhoneKeyFromJid(remoteJid, { accountId: this.accountId })
     ]);
     if (!config.enabled || !controller) {
       return;
@@ -2264,6 +2310,15 @@ export class WhatsAppControllerBridge {
         return;
       case "help":
         await this.sendReply(remoteJid, helpText());
+        return;
+      case "accounts":
+        await this.sendReply(remoteJid, await this.renderAccountList());
+        return;
+      case "account":
+        await this.handleAccountCommand({
+          remoteJid,
+          payload: command.payload
+        });
         return;
       case "projects":
         await this.sendProjectList(phoneKey, remoteJid);
@@ -2496,6 +2551,98 @@ export class WhatsAppControllerBridge {
 
   async sendProjectList(phoneKey, remoteJid) {
     await this.sendReply(remoteJid, this.renderProjectList(phoneKey));
+  }
+
+  async renderAccountList() {
+    const data = await this.accountStore.load();
+    const lines = [
+      `default_account: @${data.defaultAccount}`,
+      `controller_account: @${data.controllerAccount}`,
+      ""
+    ];
+
+    for (const account of data.accounts) {
+      const flags = [];
+      if (account.id === data.defaultAccount) {
+        flags.push("default");
+      }
+      if (account.id === data.controllerAccount) {
+        flags.push("controller");
+      }
+      if (account.enabled === false) {
+        flags.push("disabled");
+      }
+      const runtime = this.getRuntimeForAccount(account.id);
+      const summary = runtime?.summary();
+      lines.push(
+        [
+          `- ${formatAccountRef(account)}${flags.length ? ` (${flags.join(", ")})` : ""}`,
+          account.label ? `label=${account.label}` : null,
+          `status=${summary?.status ?? account.lastStatus ?? "unknown"}`,
+          `credentials=${summary?.hasCreds ?? false ? "present" : "missing"}`,
+          summary?.recentChatCount !== undefined ? `chats=${summary.recentChatCount}` : null,
+          account.userId ? `user=${account.userId}` : null
+        ]
+          .filter(Boolean)
+          .join(" ")
+      );
+    }
+
+    lines.push("");
+    lines.push("Add: /account add <tag> [label]");
+    lines.push("Auth: /account auth <tag>");
+    return lines.join("\n");
+  }
+
+  async handleAccountCommand({ remoteJid, payload }) {
+    const [actionToken = "", tagToken = "", ...labelTokens] = splitPayloadTokens(payload);
+    const action = actionToken.toLowerCase();
+
+    if (!action || action === "list" || action === "ls") {
+      await this.sendReply(remoteJid, await this.renderAccountList());
+      return;
+    }
+
+    if (!["add", "auth"].includes(action) || !tagToken) {
+      await this.sendReply(
+        remoteJid,
+        "Usage: /account add <tag> [label]\nUsage: /account auth <tag>"
+      );
+      return;
+    }
+
+    const account = await this.accountStore.addAccount({
+      tag: tagToken,
+      label: labelTokens.length ? labelTokens.join(" ") : tagToken
+    });
+    const runtime = this.runtimeForAccount(account.id);
+    const result = await runtime.startAuthFlow();
+
+    if (result.status === "connected") {
+      await this.accountStore.updateAccountStatus(account.id, {
+        userId: result.user?.id ?? null,
+        lastStatus: "connected",
+        connectedAt: new Date().toISOString()
+      });
+      await this.sendReply(
+        remoteJid,
+        `${formatAccountRef(account)} is already connected as ${result.user?.id ?? "unknown"}.`
+      );
+      return;
+    }
+
+    await this.sendReply(
+      remoteJid,
+      [
+        `Adding ${formatAccountRef(account)}.`,
+        "Scan this QR from that WhatsApp phone:",
+        "",
+        result.qrText,
+        "",
+        "WhatsApp -> Settings -> Linked Devices -> Link a Device",
+        "After scanning, send /accounts to confirm it is live."
+      ].join("\n")
+    );
   }
 
   renderProjectList(phoneKey) {
@@ -3542,19 +3689,18 @@ export class WhatsAppControllerBridge {
             remoteJid,
             `Failed to generate the voice reply locally with ${DEFAULT_TTS_PROVIDER}: ${error.message}`
           );
-          await this.sendReply(
-            remoteJid,
-            scopeType === "btw"
-              ? replyText
-              : joinMessageSections(
-                  formatProjectRunReplyPrefix({
-                    projectAlias: project.alias,
-                    threadId: result.threadId,
-                    activeProjectAlias: this.getActiveProject(phoneKey).alias
-                  }),
-                  replyText
-                )
-          );
+          if (scopeType === "btw") {
+            await this.sendTextMessage(remoteJid, sanitizeReplyTextForWhatsApp(replyText));
+          } else {
+            await this.sendCodexReply(remoteJid, {
+              relayPrefix: formatProjectRunReplyPrefix({
+                projectAlias: project.alias,
+                threadId: result.threadId,
+                activeProjectAlias: this.getActiveProject(phoneKey).alias
+              }),
+              replyText
+            });
+          }
         }
         await this.runNextQueuedPrompt({
           phoneKey,
@@ -3566,19 +3712,18 @@ export class WhatsAppControllerBridge {
         return;
       }
 
-      await this.sendReply(
-        remoteJid,
-        scopeType === "btw"
-          ? replyText
-          : joinMessageSections(
-              formatProjectRunReplyPrefix({
-                projectAlias: project.alias,
-                threadId: result.threadId,
-                activeProjectAlias: this.getActiveProject(phoneKey).alias
-              }),
-              replyText
-            )
-      );
+      if (scopeType === "btw") {
+        await this.sendTextMessage(remoteJid, sanitizeReplyTextForWhatsApp(replyText));
+      } else {
+        await this.sendCodexReply(remoteJid, {
+          relayPrefix: formatProjectRunReplyPrefix({
+            projectAlias: project.alias,
+            threadId: result.threadId,
+            activeProjectAlias: this.getActiveProject(phoneKey).alias
+          }),
+          replyText
+        });
+      }
       await this.runNextQueuedPrompt({
         phoneKey,
         remoteJid,
@@ -3632,7 +3777,17 @@ export class WhatsAppControllerBridge {
   }
 
   async sendReply(remoteJid, text) {
-    await this.sendTextMessage(remoteJid, sanitizeReplyTextForWhatsApp(text));
+    await this.sendTextMessage(remoteJid, formatRelayMessageForWhatsApp(text));
+  }
+
+  async sendCodexReply(remoteJid, { relayPrefix = null, replyText = null } = {}) {
+    await this.sendTextMessage(
+      remoteJid,
+      formatCodexReplyForWhatsApp({
+        relayPrefix,
+        replyText
+      })
+    );
   }
 
   async sendVoiceReply(remoteJid, text, voiceReply, languageIdHint = null) {
@@ -3647,8 +3802,18 @@ export class WhatsAppControllerBridge {
     });
   }
 
-  async sendTextMessage(chatId, text) {
-    const socket = await this.runtime.ensureConnected();
+  runtimeForAccount(accountId = null) {
+    const runtime = this.getRuntimeForAccount(accountId ?? this.accountId);
+    if (!runtime) {
+      throw invalidControllerCommandError(
+        `WhatsApp account "${accountId}" is not managed by the relay daemon.`
+      );
+    }
+    return runtime;
+  }
+
+  async sendTextMessage(chatId, text, { accountId = null } = {}) {
+    const socket = await this.runtimeForAccount(accountId).ensureConnected();
 
     for (const part of splitMessage(text)) {
       const sent = await socket.sendMessage(chatId, { text: part });

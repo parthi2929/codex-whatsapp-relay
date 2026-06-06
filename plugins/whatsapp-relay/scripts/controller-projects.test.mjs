@@ -16,19 +16,21 @@ import {
 } from "./controller-projects.mjs";
 
 test("normalizeConfiguredProjects migrates a legacy single-workspace config", () => {
+  const examplePath = path.resolve("/tmp/example");
   const normalized = normalizeConfiguredProjects({
     workspace: "/tmp/example",
     defaultProject: "main"
   });
 
   assert.equal(normalized.defaultProject, "main");
-  assert.equal(normalized.workspace, "/tmp/example");
+  assert.equal(normalized.workspace, examplePath);
   assert.equal(normalized.projects.length, 1);
   assert.equal(normalized.projects[0].alias, "main");
-  assert.equal(normalized.projects[0].workspace, "/tmp/example");
+  assert.equal(normalized.projects[0].workspace, examplePath);
 });
 
 test("normalizeConfiguredProjects collapses duplicate workspaces down to one project", () => {
+  const retailDashboardPath = path.resolve("/tmp/retail-dashboard");
   const normalized = normalizeConfiguredProjects({
     defaultProject: "main",
     projects: [
@@ -39,10 +41,11 @@ test("normalizeConfiguredProjects collapses duplicate workspaces down to one pro
 
   assert.equal(normalized.projects.length, 1);
   assert.equal(normalized.projects[0].alias, "retail-dashboard");
-  assert.equal(normalized.projects[0].workspace, "/tmp/retail-dashboard");
+  assert.equal(normalized.projects[0].workspace, retailDashboardPath);
 });
 
 test("resolveConfiguredProject finds aliases and workspace basenames", () => {
+  const alphaAppPath = path.resolve("/tmp/alpha-app");
   const config = {
     defaultProject: "relay",
     projects: [
@@ -51,8 +54,8 @@ test("resolveConfiguredProject finds aliases and workspace basenames", () => {
     ]
   };
 
-  assert.equal(resolveConfiguredProject(config, "alpha-app")?.workspace, "/tmp/alpha-app");
-  assert.equal(resolveConfiguredProject(config, "alpha app")?.workspace, "/tmp/alpha-app");
+  assert.equal(resolveConfiguredProject(config, "alpha-app")?.workspace, alphaAppPath);
+  assert.equal(resolveConfiguredProject(config, "alpha app")?.workspace, alphaAppPath);
 });
 
 test("findConfiguredProject resolves unique prefixes and existing workspaces", () => {
