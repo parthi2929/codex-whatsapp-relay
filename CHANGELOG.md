@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-06
+
+### Added
+
+- Alias-aware WhatsApp chat resolution for phone numbers, phone JIDs, and LID JIDs so reads, history sync, and sends choose the active mapped chat.
+- A `whatsapp_resolve_chat` MCP tool that reports resolved aliases, candidate chats, and per-chat message counts.
+
+### Changed
+
+- Cached message reads now merge messages across resolved phone/LID chat aliases before returning recent chat history.
+
 ## [0.4.4] - 2026-06-06
 
 ### Added

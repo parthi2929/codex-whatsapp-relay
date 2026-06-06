@@ -73,6 +73,7 @@ Use this skill when the user wants to connect one or more WhatsApp accounts, ins
 ## Rules
 
 - Do not guess a chat if multiple names match. List candidates first.
+- When reading or syncing by phone number, phone JID, or LID JID, resolve chat aliases first with `whatsapp_resolve_chat` or rely on alias-aware `whatsapp_read_messages` / `whatsapp_sync_history`; inspect all candidate chats before concluding a response is missing.
 - Do not guess an account tag if the user has more than one configured account and the target is ambiguous. Ask for the tag or list accounts.
 - If the user asks for older messages that are not in the local cache yet, use `whatsapp_sync_history` before concluding the history is unavailable.
 - Keep outbound messages short and explicit when the user asks you to send one.

@@ -15,6 +15,7 @@ import {
   stopControllerDaemon
 } from "./controller-process.mjs";
 import { defaultAccountId, getAccountPaths, normalizeAccountId } from "./paths.mjs";
+import { resolveJidAliases } from "./jid-aliases.mjs";
 import { WhatsAppRuntime } from "./runtime.mjs";
 import { normalizeTtsProvider } from "./voice-replier.mjs";
 
@@ -202,10 +203,49 @@ function controllerSummaryLines(config, processStatus) {
   return lines;
 }
 
-function resolveChatOrError(runtime, { chatId, chatName }) {
-  const resolved = runtime.store.resolveChat({ chatId, chatName });
+function unique(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function formatResolution(resolution) {
+  const lines = [
+    `selected: ${resolution.chat.displayName} (${resolution.chat.id})`
+  ];
+
+  if (resolution.aliases.length > 1) {
+    lines.push(`aliases: ${resolution.aliases.join(", ")}`);
+  }
+
+  if (resolution.candidates.length > 1) {
+    lines.push("candidate_chats:");
+    for (const candidate of resolution.candidates) {
+      lines.push(chatSummary(candidate));
+    }
+  }
+
+  return lines;
+}
+
+async function resolveChatOrError(runtime, { chatId, chatName }) {
+  const aliasInput = chatId ?? chatName;
+  const aliasInfo = await resolveJidAliases(aliasInput, {
+    authDir: runtime.paths.authDir,
+    store: runtime.store
+  });
+  const resolved = runtime.store.resolveChat({
+    chatId,
+    chatName,
+    aliases: aliasInfo.aliases
+  });
+
   if (resolved.match) {
-    return resolved.match;
+    return {
+      chat: resolved.match,
+      candidates: resolved.candidates,
+      aliases: unique([resolved.match.id, ...(resolved.aliases ?? [])]),
+      aliasInfo,
+      chatIds: unique(resolved.candidates.map((candidate) => candidate.id))
+    };
   }
 
   if (resolved.candidates.length > 1) {
@@ -610,8 +650,47 @@ server.tool(
 );
 
 server.tool(
+  "whatsapp_resolve_chat",
+  "Resolve a WhatsApp phone number, phone JID, LID JID, or chat name to cached chat candidates.",
+  {
+    account: z.string().min(1).optional(),
+    query: z.string().min(1).optional(),
+    chatId: z.string().min(1).optional(),
+    chatName: z.string().min(1).optional()
+  },
+  async ({ account, query, chatId, chatName }) => {
+    try {
+      const runtime = await getInitializedRuntime(account);
+      const resolvedChatId = chatId ?? (query?.includes("@") ? query : undefined);
+      const resolvedChatName = chatName ?? (!resolvedChatId ? query : undefined);
+      const resolution = await resolveChatOrError(runtime, {
+        chatId: resolvedChatId,
+        chatName: resolvedChatName
+      });
+
+      return textResult(
+        [
+          `account: @${runtime.accountId}`,
+          `input: ${query ?? chatId ?? chatName}`,
+          resolution.aliasInfo.phoneKey ? `phone_key: ${resolution.aliasInfo.phoneKey}` : null,
+          ...formatResolution(resolution),
+          ...resolution.candidates.map((candidate) => {
+            const count = runtime.store.getMessageCount(candidate.id);
+            return `messages: ${candidate.id} count=${count}`;
+          })
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
+    } catch (error) {
+      return textResult(error.message, { isError: true });
+    }
+  }
+);
+
+server.tool(
   "whatsapp_read_messages",
-  "Read recent messages from one WhatsApp chat, identified by chat id or name.",
+  "Read recent cached messages from one WhatsApp chat, resolving phone/LID aliases when possible.",
   {
     account: z.string().min(1).optional(),
     chatId: z.string().min(1).optional(),
@@ -621,17 +700,17 @@ server.tool(
   async ({ account, chatId, chatName, limit = 20 }) => {
     try {
       const runtime = await getInitializedRuntime(account);
-      const chat = resolveChatOrError(runtime, { chatId, chatName });
-      const messages = runtime.store.getMessages(chat.id, limit);
+      const resolution = await resolveChatOrError(runtime, { chatId, chatName });
+      const messages = runtime.store.getMessagesForChats(resolution.chatIds, limit);
 
       if (!messages.length) {
-        return textResult(`No cached messages found for ${chat.displayName}.`);
+        return textResult(`No cached messages found for ${resolution.chat.displayName}.`);
       }
 
       return textResult(
         [
           `account: @${runtime.accountId}`,
-          `chat: ${chat.displayName} (${chat.id})`,
+          ...formatResolution(resolution),
           ...messages.map(messageSummary)
         ].join("\n")
       );
@@ -643,7 +722,7 @@ server.tool(
 
 server.tool(
   "whatsapp_sync_history",
-  "Request older messages for a WhatsApp chat and store them in the local cache.",
+  "Request older messages for a WhatsApp chat and store them in the local cache, resolving phone/LID aliases when possible.",
   {
     account: z.string().min(1).optional(),
     chatId: z.string().min(1).optional(),
@@ -654,16 +733,16 @@ server.tool(
     try {
       await ensureDirectRuntimeAvailable("History sync", account);
       const runtime = await getInitializedRuntime(account);
-      const chat = resolveChatOrError(runtime, { chatId, chatName });
+      const resolution = await resolveChatOrError(runtime, { chatId, chatName });
       const result = await runtime.syncChatHistory({
-        chatId: chat.id,
+        chatId: resolution.chat.id,
         count
       });
 
       return textResult(
         [
           `account: @${runtime.accountId}`,
-          `chat: ${chat.displayName} (${chat.id})`,
+          ...formatResolution(resolution),
           `requested: ${count}`,
           `history_events: ${result.events}`,
           `messages_received: ${result.messages}`,
@@ -684,7 +763,7 @@ server.tool(
 
 server.tool(
   "whatsapp_send_message",
-  "Send a text message to a WhatsApp chat identified by id or name.",
+  "Send a text message to a WhatsApp chat identified by id or name, resolving phone/LID aliases when possible.",
   {
     account: z.string().min(1).optional(),
     chatId: z.string().min(1).optional(),
@@ -694,7 +773,8 @@ server.tool(
   async ({ account, chatId, chatName, text }) => {
     try {
       const runtime = await getInitializedRuntime(account);
-      const chat = resolveChatOrError(runtime, { chatId, chatName });
+      const resolution = await resolveChatOrError(runtime, { chatId, chatName });
+      const chat = resolution.chat;
       const bridgeState = await getBridgeState();
 
       if (bridgeState.ownsLiveSession) {

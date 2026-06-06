@@ -35,12 +35,12 @@ Use this repository as the source:
 https://github.com/parthi2929/codex-whatsapp-relay
 
 Install the current release tag:
-v0.4.4
+v0.5.0
 
 Do all of the following:
 
 1. Clone the repo into ~/.codex/plugins/whatsapp-relay if it does not exist yet.
-2. If it already exists, fetch tags and check out v0.4.4 without deleting unrelated user files.
+2. If it already exists, fetch tags and check out v0.5.0 without deleting unrelated user files.
 3. Run npm install inside ~/.codex/plugins/whatsapp-relay.
 4. Preserve existing WhatsApp Relay runtime state. If legacy data exists at plugins/whatsapp-relay/data/auth and plugins/whatsapp-relay/data/store.json, keep it in place; the relay will migrate it into the default @personal account on first run.
 5. Create or update ~/.agents/plugins/marketplace.json so it contains a personal marketplace entry for this plugin.
@@ -154,11 +154,14 @@ Codex tools target accounts explicitly under the hood:
 
 ```text
 whatsapp_list_chats account=sales
+whatsapp_resolve_chat account=support query="+91 73899 08818"
 whatsapp_read_messages account=support chatName="Customer ABC"
 whatsapp_send_message account=sales chatName="Ravi" text="Please send the updated PO."
 ```
 
 Tags are lowercase account names without the `@` when passed to tools. In prose, use `@sales` or `@support` so the target account is obvious.
+
+When you provide a phone number, phone JID, or LID JID, the read, sync, and send tools resolve known WhatsApp aliases first. If one side of a conversation is cached under `917...@s.whatsapp.net` and replies arrive under a mapped `...@lid` chat, the relay selects the chat with the newest activity and reads cached messages across the resolved aliases.
 
 ## Multi-Project Mental Model
 

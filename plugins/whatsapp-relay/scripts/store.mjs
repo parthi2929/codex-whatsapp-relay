@@ -142,6 +142,19 @@ function preferredChatName(chat, contact) {
   );
 }
 
+function chatSortTimestamp(chat, messages = []) {
+  return (
+    chat?.lastMessageTimestamp ??
+    chat?.timestamp ??
+    messages.at(-1)?.timestamp ??
+    0
+  );
+}
+
+function unique(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
 export class WhatsAppStore {
   constructor(filePath) {
     this.filePath = filePath;
@@ -396,9 +409,42 @@ export class WhatsAppStore {
     return chats.slice(0, limit);
   }
 
+  getChat(chatId) {
+    const chat = this.data.chats[chatId];
+    if (!chat) {
+      return null;
+    }
+
+    return {
+      ...chat,
+      displayName: preferredChatName(chat, this.data.contacts[chat.id])
+    };
+  }
+
   getMessages(chatId, limit = 20) {
     const messages = this.data.messages[chatId] ?? [];
     return messages.slice(-limit).sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+  }
+
+  getMessagesForChats(chatIds = [], limit = 20) {
+    const seen = new Set();
+    const messages = [];
+
+    for (const chatId of unique(chatIds)) {
+      for (const message of this.data.messages[chatId] ?? []) {
+        const key = `${message.chatId}:${message.id}`;
+        if (seen.has(key)) {
+          continue;
+        }
+
+        seen.add(key);
+        messages.push(message);
+      }
+    }
+
+    return messages
+      .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0))
+      .slice(-limit);
   }
 
   getMessageCount(chatId) {
@@ -414,19 +460,28 @@ export class WhatsAppStore {
     return messages[0];
   }
 
-  resolveChat({ chatId, chatName }) {
+  resolveChat({ chatId, chatName, aliases = [] }) {
     if (chatId) {
-      const exact = this.data.chats[chatId];
-      if (exact) {
+      const ids = unique([chatId, ...aliases]);
+      const candidates = ids.map((id) => this.getChat(id)).filter(Boolean);
+      if (candidates.length) {
+        candidates.sort(
+          (a, b) =>
+            chatSortTimestamp(b, this.data.messages[b.id] ?? []) -
+            chatSortTimestamp(a, this.data.messages[a.id] ?? [])
+        );
+
         return {
-          match: exact,
-          candidates: [exact]
+          match: candidates[0],
+          candidates,
+          aliases: ids
         };
       }
 
       return {
         match: null,
-        candidates: []
+        candidates: [],
+        aliases: ids
       };
     }
 
@@ -434,11 +489,32 @@ export class WhatsAppStore {
     if (!query) {
       return {
         match: null,
-        candidates: []
+        candidates: [],
+        aliases
       };
     }
 
-    const candidates = this.listChats({ limit: 50, query });
+    const aliasCandidates = unique(aliases)
+      .map((id) => this.getChat(id))
+      .filter(Boolean);
+    const candidates = aliasCandidates.length
+      ? aliasCandidates
+      : this.listChats({ limit: 50, query });
+
+    candidates.sort(
+      (a, b) =>
+        chatSortTimestamp(b, this.data.messages[b.id] ?? []) -
+        chatSortTimestamp(a, this.data.messages[a.id] ?? [])
+    );
+
+    if (aliasCandidates.length) {
+      return {
+        match: candidates[0],
+        candidates,
+        aliases
+      };
+    }
+
     const exact = candidates.find((chat) => {
       const names = [
         chat.id,
@@ -456,13 +532,15 @@ export class WhatsAppStore {
     if (exact) {
       return {
         match: exact,
-        candidates
+        candidates,
+        aliases
       };
     }
 
     return {
       match: candidates.length === 1 ? candidates[0] : null,
-      candidates
+      candidates,
+      aliases
     };
   }
 }

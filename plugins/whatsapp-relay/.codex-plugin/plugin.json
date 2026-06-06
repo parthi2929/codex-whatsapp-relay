@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-relay",
-  "version": "0.4.4",
+  "version": "0.5.0",
   "description": "Link a local WhatsApp account to Codex, manage chats, and control Codex from allowed WhatsApp numbers.",
   "install_url": "https://raw.githubusercontent.com/parthi2929/codex-whatsapp-relay/refs/heads/main/plugins/whatsapp-relay/.codex-plugin/plugin.json",
   "author": {
