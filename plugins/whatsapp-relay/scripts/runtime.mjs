@@ -19,6 +19,7 @@ import {
   getAccountPaths,
   normalizeAccountId
 } from "./paths.mjs";
+import { installOutboundMessagePacing } from "./outbound-pacing.mjs";
 import { WhatsAppStore } from "./store.mjs";
 
 const require = createRequire(import.meta.url);
@@ -218,6 +219,8 @@ export class WhatsAppRuntime {
       markOnlineOnConnect: false,
       logger: this.logger
     });
+
+    installOutboundMessagePacing(socket, { accountId: this.accountId });
 
     this.socket = socket;
     this.events.emit("socket.ready", socket);

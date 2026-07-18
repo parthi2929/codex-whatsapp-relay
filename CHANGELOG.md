@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Relay-wide outbound pacing for multi-message sends, using cryptographically random 4.00-14.00-second intervals at two-decimal precision and at least 4.00 seconds of separation between consecutive planned intervals.
+
+### Fixed
+
+- Shared runtime sends now inherit pacing automatically, including MCP, controller, split-message, and local runtime batch paths.
+
 ## [0.5.0] - 2026-06-06
 
 ### Added

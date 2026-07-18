@@ -77,6 +77,7 @@ Use this skill when the user wants to connect one or more WhatsApp accounts, ins
 - Do not guess an account tag if the user has more than one configured account and the target is ambiguous. Ask for the tag or list accounts.
 - If the user asks for older messages that are not in the local cache yet, use `whatsapp_sync_history` before concluding the history is unavailable.
 - Keep outbound messages short and explicit when the user asks you to send one.
+- Multi-message sends use the relay's built-in outbound pacing. The first message can send immediately. Every later message waits for a cryptographically random 4.00-14.00-second send interval, and consecutive planned intervals differ by at least 4.00 seconds. Keep batch sends on the shared relay runtime so this safeguard applies automatically.
 - If the user only wants a draft, do not call the send tool.
 - Keep `npm run whatsapp:auth -- --account <tag>` as a local fallback, not the primary path.
 - When relaying a QR from the plugin tools, preserve the compact block as-is instead of restyling or expanding it.
